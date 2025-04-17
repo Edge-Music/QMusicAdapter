@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QQ音乐登录</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .qr-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .qr-code {
+            max-width: 200px;
+            margin: 0 auto;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.waiting {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+        .status.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .user-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #1565c0;
+        }
+        button:disabled {
+            background-color: #bdbdbd;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>QQ音乐登录</h1>
+        <div id="login-container">
+            <button id="get-qr-btn">获取二维码</button>
+            <div id="qr-container" class="qr-container" style="display: none;">
+                <img id="qr-code" class="qr-code" src="" alt="二维码">
+                <div id="status" class="status"></div>
+            </div>
+        </div>
+        <div id="user-info" class="user-info" style="display: none;">
+            <h2>用户信息</h2>
+            <pre id="user-data"></pre>
+        </div>
+    </div>
+
+    <script>
+        let currentKey = null;
+        let checkInterval = null;
+
+        async function getQRCode() {
+            try {
+                const response = await fetch('/api/v1/connect/qr/key');
+                const data = await response.json();
+                if (data.code === 0) {
+                    currentKey = data.data.unikey;
+                    const qrResponse = await fetch(`/api/v1/connect/qr/create?key=${currentKey}&qrimg=true`);
+                    const qrData = await qrResponse.json();
+                    if (qrData.code === 0) {
+                        document.getElementById('qr-code').src = `data:image/png;base64,${qrData.data.qrimg}`;
+                        document.getElementById('qr-container').style.display = 'block';
+                        document.getElementById('get-qr-btn').disabled = true;
+                        startChecking();
+                    }
+                }
+            } catch (error) {
+                console.error('获取二维码失败:', error);
+                updateStatus('获取二维码失败', 'error');
+            }
+        }
+
+        async function checkQRStatus() {
+            if (!currentKey) return;
+            
+            try {
+                const response = await fetch(`/api/v1/connect/qr/check?key=${currentKey}`);
+                const data = await response.json();
+                
+                if (data.code === 0) {
+                    const status = data.data.status;
+                    const cookie = data.data.cookie;
+                    
+                    switch (status) {
+                        case -1:
+                            updateStatus('二维码已过期，请重新获取', 'error');
+                            stopChecking();
+                            document.getElementById('get-qr-btn').disabled = false;
+                            break;
+                        case 0:
+                            updateStatus('等待扫码...', 'waiting');
+                            break;
+                        case 1:
+                            updateStatus('已扫码，请在手机上确认', 'waiting');
+                            break;
+                        case 2:
+                            updateStatus('登录成功！', 'success');
+                            stopChecking();
+                            getUserInfo(cookie);
+                            break;
+                    }
+                }
+            } catch (error) {
+                console.error('检查状态失败:', error);
+                updateStatus('检查状态失败', 'error');
+            }
+        }
+
+        function startChecking() {
+            checkInterval = setInterval(checkQRStatus, 2000);
+        }
+
+        function stopChecking() {
+            if (checkInterval) {
+                clearInterval(checkInterval);
+                checkInterval = null;
+            }
+        }
+
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        async function getUserInfo(cookie) {
+            try {
+                const response = await fetch('/api/v1/connect/status', {
+                    headers: {
+                        'token': cookie
+                    }
+                });
+                const data = await response.json();
+                if (data.code === 0) {
+                    document.getElementById('user-data').textContent = JSON.stringify(data.data, null, 2);
+                    document.getElementById('user-info').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('获取用户信息失败:', error);
+                updateStatus('获取用户信息失败', 'error');
+            }
+        }
+
+        document.getElementById('get-qr-btn').addEventListener('click', getQRCode);
+    </script>
+</body>
+</html> 
