@@ -31,7 +31,7 @@ Pygments==2.19.1
 python-dotenv==1.0.1
 python-multipart==0.0.20
 PyYAML==6.0.2
-qqmusic-api-python==0.3.4
+qqmusic-api-python==0.5.2
 rich==14.0.0
 rich-toolkit==0.14.1
 shellingham==1.5.4

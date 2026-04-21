@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  qq-music-api:
+    build: .
+    container_name: qq-music-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Depends
 from qqmusic_api import Credential
+from qqmusic_api.login import QRLoginType
 from app.services.qq_music import QQMusicService
 from app.utils.cache import MemoryCache
 from app.utils.helpers import ResponseUtil
@@ -10,16 +11,25 @@ from qqmusic_api.user import get_homepage
 router = APIRouter()
 
 
+def get_login_type(request: Request) -> QRLoginType:
+    path = request.url.path
+    if "/wechat" in path:
+        return QRLoginType.WX
+    return QRLoginType.QQ
+
+
 @router.get("/qr/key")
-async def qr_key():
-    qr_data = await QQMusicService.get_qr_key()
+async def qr_key(request: Request, login_type: QRLoginType = Depends(get_login_type)):
+    qr_data = await QQMusicService.get_qr_key(login_type)
     # 缓存二维码数据
     MemoryCache.set(qr_data["identifier"], qr_data)
-    return ResponseUtil.success({
-        "unikey": qr_data["identifier"],
-        "qr_data": qr_data["data"],
-        "mimetype": qr_data["mimetype"]
-    })
+    return ResponseUtil.success(
+        {
+            "unikey": qr_data["identifier"],
+            "qr_data": qr_data["data"],
+            "mimetype": qr_data["mimetype"],
+        }
+    )
 
 
 @router.get("/qr/create")
@@ -28,10 +38,14 @@ async def qr_create(key: str = Query(...), qrimg: bool = Query(True)):
     if not qr_data:
         raise BusinessException("二维码已过期", ErrorCode.PARAM_ERROR)
 
-    return ResponseUtil.success({
-        "qrurl": qr_data["data"],
-        "qrimg": f"data:{qr_data['mimetype']};base64,{qr_data['data']}" if qrimg else None
-    })
+    return ResponseUtil.success(
+        {
+            "qrurl": qr_data["data"],
+            "qrimg": f"data:{qr_data['mimetype']};base64,{qr_data['data']}"
+            if qrimg
+            else None,
+        }
+    )
 
 
 @router.get("/qr/check")
@@ -44,10 +58,9 @@ async def qr_check(key: str = Query(...)):
     if status == 2:  # 登录成功
         MemoryCache.delete(key)
 
-    return ResponseUtil.success({
-        "status": status,
-        "cookie": cookie.as_json() if cookie else None
-    })
+    return ResponseUtil.success(
+        {"status": status, "cookie": cookie.as_json() if cookie else None}
+    )
 
 
 @router.get("/status")
@@ -60,11 +73,11 @@ async def status(request: Request):
         result = await get_homepage(credential.encrypt_uin, credential=credential)
         if result is None:
             raise BusinessException("获取用户信息失败", ErrorCode.SYSTEM_ERROR)
-        info = result['Info']['BaseInfo']
+        info = result["Info"]["BaseInfo"]
         result = {
             "id": credential.musicid,
-            "name": info['Name'],
-            "avatar": info['Avatar']
+            "name": info["Name"],
+            "avatar": info["Avatar"],
         }
         return ResponseUtil.success(result)
     except Exception as e:
