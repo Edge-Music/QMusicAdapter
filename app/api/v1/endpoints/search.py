@@ -2,25 +2,33 @@ from fastapi import APIRouter, Query, Request
 from app.utils.helpers import ResponseUtil
 from app.common.exceptions.business_exception import BusinessException
 from app.common.constants.error_code import ErrorCode
-from qqmusic_api import Credential
-from qqmusic_api.search import search_by_type, SearchType
+from qqmusic_api import Client, Credential
+from qqmusic_api.modules.search import SearchType
 from app.common.types.playlist import convert_qq_song
-import asyncio
 
 
 router = APIRouter()
 
+
 @router.get("/")
 async def search(request: Request, keywords: str = Query(...), limit: int = Query(10)):
-    if not request.state.base_params.get("cookie"):
+    cookie_dict = request.state.base_params.get("cookie")
+    if not cookie_dict:
         raise BusinessException("请先登录", ErrorCode.UNAUTHORIZED)
 
-    credential: Credential = request.state.base_params["cookie"]
+    credential = Credential.model_validate(cookie_dict)
     try:
-        result = await search_by_type(keyword=keywords, num=limit, credential=credential, highlight=False, search_type=SearchType.SONG)
-        songs = await asyncio.gather(*[convert_qq_song(song) for song in result])
-        return ResponseUtil.success({
-          "songs": songs
-        })
+        async with Client(credential=credential) as client:
+            result_resp = client.search.search_by_type(
+                keyword=keywords,
+                num=limit,
+                search_type=SearchType.SONG,
+                highlight=False,
+            )
+            result = await result_resp
+            songs = (
+                [convert_qq_song(song) for song in result.songs] if result.songs else []
+            )
+            return ResponseUtil.success({"songs": songs})
     except Exception as e:
         raise BusinessException(f"搜索失败: {str(e)}", ErrorCode.SYSTEM_ERROR)

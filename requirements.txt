@@ -1,5 +1,6 @@
 aiocache>=0.12.3
 fastapi>=0.109.2
+pydantic-settings>=2.1.0
 qqmusic-api-python>=0.5.2
 python-dotenv>=1.0.0
 python-multipart>=0.0.20

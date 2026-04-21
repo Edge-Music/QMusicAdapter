@@ -1,12 +1,9 @@
 from fastapi import APIRouter, Query, Request
-from qqmusic_api import Credential
+from qqmusic_api import Client, Credential
+from qqmusic_api.modules.song import SongFileType, SongFileInfo
 from app.utils.helpers import ResponseUtil
 from app.common.exceptions.business_exception import BusinessException
 from app.common.constants.error_code import ErrorCode
-from qqmusic_api.song import get_song_urls, SongFileType, get_detail, query_song
-from qqmusic_api.lyric import get_lyric
-from qqmusic_api.songlist import add_songs, del_songs
-from qqmusic_api.user import get_created_songlist, get_fav_song
 
 import asyncio
 
@@ -27,95 +24,115 @@ async def recommend():
 
 @router.get("/detail")
 async def detail(request: Request, id: str = Query(...), br: int = Query(320000)):
-    if not request.state.base_params.get("cookie"):
+    cookie_dict = request.state.base_params.get("cookie")
+    if not cookie_dict:
         raise BusinessException("请先登录", ErrorCode.UNAUTHORIZED)
 
-    credential: Credential = request.state.base_params["cookie"]
-    # 选择离用户最近的音质
+    credential = Credential.model_validate(cookie_dict)
     br = min(br_map.keys(), key=lambda x: abs(x - br))
     file_type = br_map[br]
 
-    # 获取歌曲URL和详情
-    url_result, detail_result, fav_result = await asyncio.gather(
-        get_song_urls(mid=[id], file_type=file_type, credential=credential),
-        get_detail(value=id),
-        get_fav_song(euin=credential.encrypt_uin, credential=credential, num=2000)
-    )
-    fav_songs = fav_result.get("songlist", [])
-    fav_song_ids = [song.get("mid") for song in fav_songs]
-    url = url_result[id]
-    # 获取文件大小
-    file_size = 0
-    if detail_result and "track_info" in detail_result:
-        file_info = detail_result["track_info"].get("file", {})
-        # 根据选择的音质获取对应的文件大小
-        size_map = {
-            128000: file_info.get("size_128mp3", 0),
-            192000: file_info.get("size_192aac", 0),
-            320000: file_info.get("size_320mp3", 0),
-            350000: file_info.get("size_flac", 0)
-        }
-        file_size = size_map.get(br, 0)
+    async with Client(credential=credential) as client:
+        url_result_resp, detail_result_resp, fav_result_resp = await asyncio.gather(
+            client.song.get_song_urls([SongFileInfo(mid=id)], file_type=file_type),
+            client.song.get_detail(value=id),
+            client.user.get_fav_song(euin=credential.encrypt_uin, num=2000),
+        )
 
-    # 获取歌词
-    lyric = await get_lyric(value=id, trans=True, roma=True)
+        url_result = await url_result_resp
+        detail_result = await detail_result_resp
+        fav_result = await fav_result_resp
 
-    return ResponseUtil.success({
-        "id": id,
-        "meta": {
-            "url": url,
-            "size": file_size,
-            "bitrate": br,
-            "isFavorite": id in fav_song_ids,
-            "lyric": {
-                "normal": lyric.get("lyric", None),
-                "translation": lyric.get("trans", None),
-                "transliteration": lyric.get("roma", None)
+        fav_song_ids = (
+            [song.mid for song in fav_result.songs] if fav_result.songs else []
+        )
+
+        url = ""
+        if url_result.data:
+            url_item = url_result.data[0]
+            if url_item.purl:
+                url = f"https://ws.stream.qqmusic.qq.com/{url_item.purl}"
+
+        file_size = 0
+        if detail_result and detail_result.track and detail_result.track.file:
+            file_info = detail_result.track.file
+            size_map = {
+                128000: file_info.size_128mp3,
+                192000: file_info.size_192aac,
+                320000: file_info.size_320mp3,
+                350000: file_info.size_flac,
             }
-        }
-    })
+            file_size = size_map.get(br, 0)
+
+        lyric_resp = client.lyric.get_lyric(value=id, trans=True, roma=True)
+        lyric = await lyric_resp
+
+        return ResponseUtil.success(
+            {
+                "id": id,
+                "meta": {
+                    "url": url,
+                    "size": file_size,
+                    "bitrate": br,
+                    "isFavorite": id in fav_song_ids,
+                    "lyric": {
+                        "normal": lyric.lyric if lyric else None,
+                        "translation": lyric.trans if lyric else None,
+                        "transliteration": lyric.roma if lyric else None,
+                    },
+                },
+            }
+        )
 
 
 @router.put("/like")
 async def like(request: Request, id: str = Query(...), like: bool = Query(True)):
-    if not request.state.base_params.get("cookie"):
+    cookie_dict = request.state.base_params.get("cookie")
+    if not cookie_dict:
         raise BusinessException("请先登录", ErrorCode.UNAUTHORIZED)
 
-    credential: Credential = request.state.base_params["cookie"]
-    # 传入的id其实是mid，从mid反查id
-    tracks = await query_song(value=[id])
-    if not tracks:
-        raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
-    raw_id = id
-    id = tracks[0].get("id")
-    if not id:
-        raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
-    # 获取用户创建的歌单列表
-    created_playlists = await get_created_songlist(uin=credential.str_musicid, credential=credential)
-    if not created_playlists:
-        raise BusinessException("获取创建的歌单失败", ErrorCode.SYSTEM_ERROR)
-    # 从创建的歌单中获取第一个歌单的 dirid
-    dirid = created_playlists[0].get("dirId")
-    playlistId = created_playlists[0].get("tid")
-    if not dirid:
-        raise BusinessException("获取歌单ID失败", ErrorCode.SYSTEM_ERROR)
-    # 根据操作添加或删除歌曲
-    try:
-        if like:
-            await add_songs(dirid=dirid, song_ids=[
-                int(id)], credential=credential)
-        else:
-            await del_songs(dirid=dirid, song_ids=[
-                int(id)], credential=credential)
-    except KeyError as e:
-        if "result" in str(e):
-            # 忽略 result 字段缺失的错误，因为接口实际上是成功的
-            pass
-        else:
-            raise e
+    credential = Credential.model_validate(cookie_dict)
 
-    return ResponseUtil.success({
-        "id": raw_id,
-        "like": like,
-        "playlist": playlistId
-    })
+    async with Client(credential=credential) as client:
+        tracks_resp = client.song.query_song(value=[id])
+        tracks = await tracks_resp
+
+        if not tracks or not tracks.tracks:
+            raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
+
+        raw_id = id
+        song_id = tracks.tracks[0].id
+        song_type = tracks.tracks[0].type or 0
+
+        if not song_id:
+            raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
+
+        created_playlists_resp = client.user.get_created_songlist(
+            uin=int(credential.str_musicid)
+        )
+        created_playlists = await created_playlists_resp
+
+        if not created_playlists or not created_playlists.playlists:
+            raise BusinessException("获取创建的歌单失败", ErrorCode.SYSTEM_ERROR)
+
+        dirid = created_playlists.playlists[0].dirid
+        playlist_id = created_playlists.playlists[0].id
+
+        if not dirid:
+            raise BusinessException("获取歌单ID失败", ErrorCode.SYSTEM_ERROR)
+
+        try:
+            if like:
+                await client.songlist.add_songs(
+                    dirid=dirid, song_info=[(song_id, song_type)], credential=credential
+                )
+            else:
+                await client.songlist.del_songs(
+                    dirid=dirid, song_info=[(song_id, song_type)], credential=credential
+                )
+        except Exception:
+            pass
+
+        return ResponseUtil.success(
+            {"id": raw_id, "like": like, "playlist": playlist_id}
+        )
