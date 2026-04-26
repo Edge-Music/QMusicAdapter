@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Query, Request, Depends
 from qqmusic_api import Client, Credential
 from qqmusic_api.models.login import QRLoginType
@@ -56,7 +58,7 @@ async def qr_check(key: str = Query(...)):
     if status == 2:
         MemoryCache.delete(key)
 
-    return ResponseUtil.success({"status": status, "cookie": cookie})
+    return ResponseUtil.success({"status": status, "cookie": json.dumps(cookie) if cookie else None})
 
 
 @router.get("/status")
@@ -68,17 +70,14 @@ async def status(request: Request):
     credential = Credential.model_validate(cookie_dict)
     try:
         async with Client(credential=credential) as client:
-            result = await client.user.get_homepage(credential.encrypt_uin)
-            result_data = await result
+            result_data = await client.user.get_homepage(credential.encrypt_uin)
             if result_data is None:
                 raise BusinessException("获取用户信息失败", ErrorCode.SYSTEM_ERROR)
-            info = result_data.info.base_info
-            return ResponseUtil.success(
-                {
-                    "id": credential.musicid,
-                    "name": info.name,
-                    "avatar": info.avatar,
-                }
-            )
+            info = result_data.base_info
+            return ResponseUtil.success({
+                "id": credential.musicid,
+                "name": info.name,
+                "avatar": info.avatar,
+            })
     except Exception as e:
         raise BusinessException(f"获取用户信息失败: {str(e)}", ErrorCode.SYSTEM_ERROR)

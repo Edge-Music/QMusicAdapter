@@ -1,9 +1,8 @@
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from pydantic import BaseModel
 from enum import Enum
-import asyncio
-from qqmusic_api import Credential
-from qqmusic_api.models.base import Song, Singer, Album as QqAlbum
+from qqmusic_api.models.base import Song
+from qqmusic_api.models.songlist import GetSonglistDetailResponse
 
 
 class PlaylistType(str, Enum):
@@ -167,11 +166,15 @@ def convert_qq_song(raw_song: Song) -> SongItem:
 
 
 async def convert_qq_playlist_detail(
-    raw_playlist: Dict[str, Any], credential: Credential
+    raw_playlist: Union[GetSonglistDetailResponse, Dict[str, Any]], credential: Any
 ) -> Dict[str, Any]:
     songs = []
-    if "songs" in raw_playlist:
-        songs = [convert_qq_song(song) for song in raw_playlist["songs"]]
+    if isinstance(raw_playlist, GetSonglistDetailResponse):
+        if raw_playlist.songs:
+            songs = [convert_qq_song(song) for song in raw_playlist.songs]
+        return {"id": str(raw_playlist.info.id) if raw_playlist.info else "", "songs": songs}
 
-    dirinfo = raw_playlist.get("dirinfo", {})
-    return {"id": str(dirinfo.get("id", "")), "songs": songs}
+    raw_songs = raw_playlist.get("songs") or []
+    songs = [convert_qq_song(song) for song in raw_songs]
+    info = raw_playlist.get("info", {})
+    return {"id": str(info.get("id", "")), "songs": songs}

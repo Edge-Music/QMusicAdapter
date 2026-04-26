@@ -19,15 +19,14 @@ async def search(request: Request, keywords: str = Query(...), limit: int = Quer
     credential = Credential.model_validate(cookie_dict)
     try:
         async with Client(credential=credential) as client:
-            result_resp = client.search.search_by_type(
+            result = await client.search.search_by_type(
                 keyword=keywords,
                 num=limit,
                 search_type=SearchType.SONG,
                 highlight=False,
             )
-            result = await result_resp
             songs = (
-                [convert_qq_song(song) for song in result.songs] if result.songs else []
+                [convert_qq_song(song) for song in result.song] if result.song else []
             )
             return ResponseUtil.success({"songs": songs})
     except Exception as e:

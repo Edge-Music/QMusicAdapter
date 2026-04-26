@@ -16,10 +16,24 @@ br_map = {
     350000: SongFileType.FLAC,
 }
 
+FALLBACK_ORDER = [350000, 320000, 192000, 128000]
+
 
 @router.get("/recommend")
 async def recommend():
     return ResponseUtil.success([])
+
+
+async def _get_song_url(client, mid: str, file_type: SongFileType, credential: Credential) -> str:
+    resp = await client.song.get_song_urls(
+        [SongFileInfo(mid=mid)], file_type=file_type, credential=credential
+    )
+    if resp.data and resp.data[0].purl:
+        cdn = await client.song.get_cdn_dispatch()
+        if cdn.sip:
+            return cdn.sip[0] + resp.data[0].purl
+        return f"https://ws.stream.qqmusic.qq.com/{resp.data[0].purl}"
+    return ""
 
 
 @router.get("/detail")
@@ -33,25 +47,25 @@ async def detail(request: Request, id: str = Query(...), br: int = Query(320000)
     file_type = br_map[br]
 
     async with Client(credential=credential) as client:
-        url_result_resp, detail_result_resp, fav_result_resp = await asyncio.gather(
-            client.song.get_song_urls([SongFileInfo(mid=id)], file_type=file_type),
-            client.song.get_detail(value=id),
-            client.user.get_fav_song(euin=credential.encrypt_uin, num=2000),
+        detail_result, fav_result = await asyncio.gather(
+            asyncio.ensure_future(client.song.get_detail(value=id)),
+            asyncio.ensure_future(client.user.get_fav_song(euin=credential.encrypt_uin, num=2000)),
         )
-
-        url_result = await url_result_resp
-        detail_result = await detail_result_resp
-        fav_result = await fav_result_resp
 
         fav_song_ids = (
             [song.mid for song in fav_result.songs] if fav_result.songs else []
         )
 
-        url = ""
-        if url_result.data:
-            url_item = url_result.data[0]
-            if url_item.purl:
-                url = f"https://ws.stream.qqmusic.qq.com/{url_item.purl}"
+        url = await _get_song_url(client, id, file_type, credential)
+
+        if not url:
+            for fallback_br in FALLBACK_ORDER:
+                if fallback_br == br:
+                    continue
+                url = await _get_song_url(client, id, br_map[fallback_br], credential)
+                if url:
+                    br = fallback_br
+                    break
 
         file_size = 0
         if detail_result and detail_result.track and detail_result.track.file:
@@ -64,8 +78,8 @@ async def detail(request: Request, id: str = Query(...), br: int = Query(320000)
             }
             file_size = size_map.get(br, 0)
 
-        lyric_resp = client.lyric.get_lyric(value=id, trans=True, roma=True)
-        lyric = await lyric_resp
+        lyric_resp = await client.lyric.get_lyric(value=id, trans=True, roma=True)
+        lyric = lyric_resp.decrypt() if lyric_resp.crypt == 1 else lyric_resp
 
         return ResponseUtil.success(
             {
@@ -94,8 +108,7 @@ async def like(request: Request, id: str = Query(...), like: bool = Query(True))
     credential = Credential.model_validate(cookie_dict)
 
     async with Client(credential=credential) as client:
-        tracks_resp = client.song.query_song(value=[id])
-        tracks = await tracks_resp
+        tracks = await client.song.query_song(value=[id])
 
         if not tracks or not tracks.tracks:
             raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
@@ -107,10 +120,9 @@ async def like(request: Request, id: str = Query(...), like: bool = Query(True))
         if not song_id:
             raise BusinessException("歌曲不存在", ErrorCode.SYSTEM_ERROR)
 
-        created_playlists_resp = client.user.get_created_songlist(
+        created_playlists = await client.user.get_created_songlist(
             uin=int(credential.str_musicid)
         )
-        created_playlists = await created_playlists_resp
 
         if not created_playlists or not created_playlists.playlists:
             raise BusinessException("获取创建的歌单失败", ErrorCode.SYSTEM_ERROR)
